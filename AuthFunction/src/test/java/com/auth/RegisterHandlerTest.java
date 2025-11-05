@@ -47,7 +47,7 @@ public class RegisterHandlerTest {
         APIGatewayProxyResponseEvent response = handler.handleRequest(event, mock(Context.class));
 
         assertEquals(Integer.valueOf(400), response.getStatusCode());
-        assertTrue(response.getBody().contains("Invalid input"));
+        assertTrue(response.getBody().contains("Password must be at least 8 characters"));
     }
 
 

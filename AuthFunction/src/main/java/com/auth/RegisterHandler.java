@@ -16,15 +16,18 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyRequestEvent;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyResponseEvent;
+import com.google.gson.JsonSyntaxException;
 import org.mindrot.jbcrypt.BCrypt;
 import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.enhanced.dynamodb.*;
 import software.amazon.awssdk.enhanced.dynamodb.internal.conditional.EqualToConditional;
 import software.amazon.awssdk.enhanced.dynamodb.model.Page;
 import software.amazon.awssdk.enhanced.dynamodb.model.PageIterable;
+import software.amazon.awssdk.enhanced.dynamodb.model.PutItemEnhancedRequest;
 import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.endpoints.internal.GetAttr;
+import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 
 /**
  * Handler for requests to Lambda function.
@@ -56,84 +59,121 @@ public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEve
     }
 
     public APIGatewayProxyResponseEvent handleRequest(final APIGatewayProxyRequestEvent event, final Context context) {
-        Map<String, String> headers = new HashMap<>();
+        Map<String, String> headers = getCorsHeaders();
         headers.put("Content-Type", "application/json");
         headers.put("X-Custom-Header", "application/json");
-
         APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
                 .withHeaders(headers);
+        try {
+            // KEY CHANGE: Get the POST body
+            String body = event.getBody();
 
-        // KEY CHANGE: Get the POST body
-        String body = event.getBody();
+            // Basic validation
+            // TODO implement strict password
+            String email = "";
+            String password = "";
+            String name = "";
+            try {
+                Map<String, String> requestData = gson.fromJson(body, Map.class);
+                if (requestData == null) throw new JsonSyntaxException("Empty body");
 
-        // Parse JSON from the body
-        Map<String, String> requestData = gson.fromJson(body, Map.class);
+                email = requestData.get("email") != null ? requestData.get("email").trim().toLowerCase() : null;
+                password = requestData.get("password");
+                name = requestData.get("name") != null ? requestData.get("name").trim() : null;
 
-        // Extract fields from the POST data
-        String email = requestData.get("email");
-        String password = requestData.get("password");
-        String name = requestData.get("name");
+                // Email regex (simple RFC-like)
+                if (email == null || !email.matches("^[A-Za-z0-9+_.-]+@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})$") || email.length() > 254) {
+                    throw new IllegalArgumentException("Invalid email format");
+                }
+                if (name != null && (name.isEmpty() || name.length() > 50)) {
+                    throw new IllegalArgumentException("Name must be 1-50 characters");
+                }
+                if (password == null || password.length() < 8) {
+                    throw new IllegalArgumentException("Password must be at least 8 characters");
+                }
 
-        // Basic validation
-        // TODO implement strict password
-        if (email == null || password == null || password.length() < 8) {
-            response.setStatusCode(400);
-            response.setBody("{\"error\": \"Invalid input. Password must be at least 8 characters.\"}");
-            return response;
-        }
-
-        // Hash password with BCrypt
-        String passwordHash = BCrypt.hashpw(password, BCrypt.gensalt(12));
-
-        // Create user object
-        // TODO check user exists
-        User user = new User();
-        user.setUserId(UUID.randomUUID().toString());
-        user.setEmail(email.toLowerCase());
-        user.setPasswordHash(passwordHash);
-        user.setName(name);
-        user.setCreatedAt(System.currentTimeMillis());
-
-        String gsiName = "EmailIndex"; // Replace with your actual GSI name
-
-        DynamoDbIndex<User> emailGSI = userTable.index(gsiName);
-
-        SdkIterable<Page<User>> results = emailGSI.query(new EqualToConditional(Key.builder()
-                .partitionValue(email.toLowerCase())
-                .build()));
-
-        User existingUser = null;
-        for (Page<User> page : results) {
-            if (!page.items().isEmpty()) {
-                existingUser = page.items().getFirst();
-                break;
+            } catch (JsonSyntaxException | IllegalArgumentException e) {
+                response.setStatusCode(400);
+                response.setBody("{\"error\": \"" + e.getMessage() + "\"}");
+                return response;
             }
-        }
 
-        if (existingUser != null) {
-            user = existingUser;
-            System.out.println("User already exists: " + user.getEmail());
-        } else {
-            user = new User();
+            // Hash password with BCrypt
+            String passwordHash = BCrypt.hashpw(password, BCrypt.gensalt(12));
+
+            // Create user object
+            // TODO check user exists
+            User user = new User();
             user.setUserId(UUID.randomUUID().toString());
             user.setEmail(email.toLowerCase());
             user.setPasswordHash(passwordHash);
             user.setName(name);
             user.setCreatedAt(System.currentTimeMillis());
 
-            userTable.putItem(user);
-            System.out.println("New user created: " + user.getEmail());
+            String gsiName = "EmailIndex"; // Replace with your actual GSI name
+
+            DynamoDbIndex<User> emailGSI = userTable.index(gsiName);
+
+            SdkIterable<Page<User>> results = emailGSI.query(new EqualToConditional(Key.builder()
+                    .partitionValue(email.toLowerCase())
+                    .build()));
+
+            User existingUser = null;
+            for (Page<User> page : results) {
+                if (!page.items().isEmpty()) {
+                    existingUser = page.items().getFirst();
+                    break;
+                }
+            }
+
+            if (existingUser != null) {
+                user = existingUser;
+                System.out.println("User already exists: " + user.getEmail());
+            } else {
+                user = new User();
+                user.setUserId(UUID.randomUUID().toString());
+                user.setEmail(email.toLowerCase());
+                user.setPasswordHash(passwordHash);
+                user.setName(name);
+                user.setCreatedAt(System.currentTimeMillis());
+
+                // Build conditional request: fail if email already exists in GSI
+                Expression condition = Expression.builder()
+                        .expression("attribute_not_exists(EmailIndex.partitionKey)") // Adjust to your GSI attr
+                        .expressionValues(Map.of("pk", software.amazon.awssdk.services.dynamodb.model.AttributeValue.builder().s(email.toLowerCase()).build()))
+                        .build();
+
+                PutItemEnhancedRequest<User> request = PutItemEnhancedRequest.builder(User.class)
+                        .item(user)
+                        .conditionExpression(condition)
+                        .build();
+
+                try {
+                    userTable.putItem(request);
+                    System.out.println("New user created: " + email);
+                } catch (ConditionalCheckFailedException e) {
+                    // Return existing user or 409 Conflict
+                    response.setStatusCode(409);
+                    response.setBody("{\"error\": \"User with this email already exists.\"}");
+                    return response;
+                }
+            }
+
+            // Return success response (don't include password hash!)
+            Map<String, String> responseBody = new HashMap<>();
+            responseBody.put("message", "User registered successfully");
+            responseBody.put("userId", user.getUserId());
+            responseBody.put("email", user.getEmail());
+
+            response.setStatusCode(201);
+            response.setBody(gson.toJson(responseBody));
+            return response;
+        } catch (Exception e) { // For DynamoDB or other errors
+            context.getLogger().log("Error creating user: " + e.getMessage());
+            response.setStatusCode(500);
+            response.setBody("{\"error\": \"Internal server error\"}");
+            return response;
         }
-
-        // Return success response (don't include password hash!)
-        Map<String, String> responseBody = new HashMap<>();
-        responseBody.put("message", "User registered successfully");
-        responseBody.put("userId", user.getUserId());
-        responseBody.put("email", user.getEmail());
-
-        response.setStatusCode(201);
-        response.setBody(gson.toJson(responseBody));
-        return response;
     }
 
     private Map<String, String> getCorsHeaders() {
