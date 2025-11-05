@@ -128,7 +128,7 @@ public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEve
 
             if (existingUser != null) {
                 user = existingUser;
-                System.out.println("User already exists: " + user.getEmail());
+                System.out.println("User already exists:  " + user.getEmail());
             } else {
                 user = new User();
                 user.setUserId(UUID.randomUUID().toString());
