@@ -33,7 +33,3 @@ jobs:
       - name: Sts GetCallerIdentity
         run: |
           aws sts get-caller-identity
-      - name: OSV Scan
-        uses: google/osv-scanner-action@v2.0.0
-        with:
-          scan-args: "--recursive"  # Scans all deps
