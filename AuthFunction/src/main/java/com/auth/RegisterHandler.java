@@ -17,6 +17,9 @@ import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyRequestEvent;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyResponseEvent;
 import com.google.gson.JsonSyntaxException;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.security.Keys;
 import org.mindrot.jbcrypt.BCrypt;
 import software.amazon.awssdk.core.pagination.sync.SdkIterable;
 import software.amazon.awssdk.enhanced.dynamodb.*;
@@ -28,6 +31,8 @@ import software.amazon.awssdk.enhanced.dynamodb.model.QueryConditional;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.endpoints.internal.GetAttr;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
+
+import javax.crypto.SecretKey;
 
 /**
  * Handler for requests to Lambda function.
@@ -102,7 +107,6 @@ public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEve
             String passwordHash = BCrypt.hashpw(password, BCrypt.gensalt(12));
 
             // Create user object
-            // TODO check user exists
             User user = new User();
             user.setUserId(UUID.randomUUID().toString());
             user.setEmail(email.toLowerCase());
@@ -110,22 +114,7 @@ public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEve
             user.setName(name);
             user.setCreatedAt(System.currentTimeMillis());
 
-            String gsiName = "EmailIndex"; // Replace with your actual GSI name
-
-            DynamoDbIndex<User> emailGSI = userTable.index(gsiName);
-
-            SdkIterable<Page<User>> results = emailGSI.query(new EqualToConditional(Key.builder()
-                    .partitionValue(email.toLowerCase())
-                    .build()));
-
-            User existingUser = null;
-            for (Page<User> page : results) {
-                if (!page.items().isEmpty()) {
-                    existingUser = page.items().getFirst();
-                    break;
-                }
-            }
-
+            User existingUser = checkAndGetExistingUser(email);
             if (existingUser != null) {
                 user = existingUser;
                 System.out.println("User already exists: " + user.getEmail());
@@ -159,21 +148,61 @@ public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEve
                 }
             }
 
-            // Return success response (don't include password hash!)
-            Map<String, String> responseBody = new HashMap<>();
+            // Generate JWT token
+            Map<String, Object> claims = new HashMap<>();
+            claims.put("sub", user.getUserId());  // Standard subject claim for user ID
+            claims.put("email", user.getEmail());
+            if (user.getName() != null) {
+                claims.put("name", user.getName());
+            }
+            long nowMillis = System.currentTimeMillis();
+            claims.put("iat", nowMillis / 1000);  // Issued at (seconds)
+            claims.put("exp", (nowMillis / 1000) + 3600);  // Expires in 1 hour (adjust as needed)
+
+            String jwtSecret = System.getenv("JWT_SECRET");
+            if (jwtSecret == null || jwtSecret.isEmpty()) {
+                throw new RuntimeException("JWT_SECRET environment variable is required");
+            }
+            SecretKey signingKey = Keys.hmacShaKeyFor(jwtSecret.getBytes());
+
+            String jwtToken = Jwts.builder()
+                    .setClaims(claims)
+                    .signWith(signingKey, SignatureAlgorithm.HS256)
+                    .compact();
+
+            // Return success response with JWT (don't include password hash!)
+            Map<String, Object> responseBody = new HashMap<>();  // Use Object to support token string
             responseBody.put("message", "User registered successfully");
             responseBody.put("userId", user.getUserId());
             responseBody.put("email", user.getEmail());
+            responseBody.put("token", jwtToken);  // Attach the JWT here
 
             response.setStatusCode(201);
-            response.setBody(gson.toJson(responseBody));
+            response.setBody(gson.toJson(responseBody));  // Gson handles the mixed types
             return response;
         } catch (Exception e) { // For DynamoDB or other errors
-            context.getLogger().log("Error creating user: " + e.getMessage());
+            context.getLogger().log("Error creating user:  " + e.getMessage());
             response.setStatusCode(500);
             response.setBody("{\"error\": \"Internal server error\"}");
             return response;
         }
+    }
+
+    private User checkAndGetExistingUser(String email) {
+        DynamoDbIndex<User> emailGSI = userTable.index("EmailIndex");
+
+        SdkIterable<Page<User>> results = emailGSI.query(new EqualToConditional(Key.builder()
+                .partitionValue(email.toLowerCase())
+                .build()));
+
+        User existingUser = null;
+        for (Page<User> page : results) {
+            if (!page.items().isEmpty()) {
+                existingUser = page.items().getFirst();
+                break;
+            }
+        }
+        return existingUser;
     }
 
     private Map<String, String> getCorsHeaders() {

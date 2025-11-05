@@ -76,4 +76,5 @@ coverage/
 # VS Code (if you switch IDEs)
 .vscode/
 
+env.json
 code_snippet.txt

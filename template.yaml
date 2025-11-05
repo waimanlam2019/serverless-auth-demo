@@ -5,6 +5,13 @@ Description: >
 
   Sample SAM Template for serverless-auth-demo
 
+Parameters:
+  JwtSecret:
+    Type: String
+    NoEcho: true  # Hides the value in CloudFormation console outputs
+    Description: Secret key for JWT signing (at least 256 bits for HS256)
+
+
 # More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
 Globals:
   Function:
@@ -24,6 +31,7 @@ Resources:
       Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
         Variables:
           USERS_TABLE: !Ref UsersTable
+          JWT_SECRET: !Ref JwtSecret  # Accessible as process.env.JWT_SECRET in Lambda
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
