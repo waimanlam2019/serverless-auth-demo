@@ -16,29 +16,27 @@ import software.amazon.awssdk.enhanced.dynamodb.*;
 import software.amazon.awssdk.enhanced.dynamodb.internal.conditional.EqualToConditional;
 import software.amazon.awssdk.enhanced.dynamodb.model.Page;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 
 import javax.crypto.SecretKey;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
- * Handler for requests to Lambda function.
+ * Handler for login requests to Lambda function.
  */
-public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
+public class LoginHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
 
     private final Gson gson = new Gson();
     private final DynamoDbTable<User> userTable;
 
     // Constructor for Lambda runtime (no arguments - AWS calls this)
-    public RegisterHandler() {
+    public LoginHandler() {
         this(createDefaultTable());
     }
 
     // Constructor for testing (accepts mock table)
-    public RegisterHandler(DynamoDbTable<User> userTable) {
+    public LoginHandler(DynamoDbTable<User> userTable) {
         this.userTable = userTable;
     }
 
@@ -53,83 +51,81 @@ public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEve
         return enhancedClient.table(tableName, TableSchema.fromBean(User.class));
     }
 
-    public APIGatewayProxyResponseEvent handleRequest(final APIGatewayProxyRequestEvent event, final Context context) {
+    @Override
+    public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent event, Context context) {
         Map<String, String> headers = getCorsHeaders();
-        headers.put("Content-Type", "application/json");
-        headers.put("X-Custom-Header", "application/json");
         APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
                 .withHeaders(headers);
+
         try {
-            // KEY CHANGE: Get the POST body
             String body = event.getBody();
-
-            // Basic validation
-            // TODO implement strict password
-            String email = "";
-            String password = "";
-            String name = "";
-            try {
-                Map<String, String> requestData = gson.fromJson(body, Map.class);
-                if (requestData == null) throw new JsonSyntaxException("Empty body");
-
-                email = requestData.get("email") != null ? requestData.get("email").trim().toLowerCase() : null;
-                password = requestData.get("password");
-                name = requestData.get("name") != null ? requestData.get("name").trim() : null;
-
-                // Email regex (simple RFC-like)
-                if (email == null || !email.matches("^[A-Za-z0-9+_.-]+@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})$") || email.length() > 254) {
-                    throw new IllegalArgumentException("Invalid email format");
-                }
-                if (name != null && (name.isEmpty() || name.length() > 50)) {
-                    throw new IllegalArgumentException("Name must be 1-50 characters");
-                }
-                if (password == null || password.length() < 8) {
-                    throw new IllegalArgumentException("Password must be at least 8 characters");
-                }
-
-            } catch (JsonSyntaxException | IllegalArgumentException e) {
+            if (body == null || body.isEmpty()) {
                 response.setStatusCode(400);
-                response.setBody("{\"error\": \"" + e.getMessage() + "\"}");
+                response.setBody("{\"error\": \"Request body is required\"}");
                 return response;
             }
 
-            // Hash password with BCrypt
-            String passwordHash = BCrypt.hashpw(password, BCrypt.gensalt(12));
+            Map<String, String> requestData;
+            try {
+                requestData = gson.fromJson(body, Map.class);
+                if (requestData == null) throw new JsonSyntaxException("Empty body");
+            } catch (JsonSyntaxException e) {
+                response.setStatusCode(400);
+                response.setBody("{\"error\": \"Invalid JSON in request body\"}");
+                return response;
+            }
 
-            // Create user object
-            User user = new User();
-            user.setUserId(UUID.randomUUID().toString());
-            user.setEmail(email.toLowerCase());
-            user.setPasswordHash(passwordHash);
-            user.setName(name);
-            user.setCreatedAt(System.currentTimeMillis());
+            String email = requestData.get("email");
+            String password = requestData.get("password");
 
+            if (email == null || email.trim().isEmpty()) {
+                response.setStatusCode(400);
+                response.setBody("{\"error\": \"Email is required\"}");
+                return response;
+            }
+            if (password == null || password.isEmpty()) {
+                response.setStatusCode(400);
+                response.setBody("{\"error\": \"Password is required\"}");
+                return response;
+            }
+
+            // Normalize email
+            email = email.trim().toLowerCase();
+
+            // Basic email validation (same as registration)
+            if (!email.matches("^[A-Za-z0-9+_.-]+@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})$") || email.length() > 254) {
+                response.setStatusCode(400);
+                response.setBody("{\"error\": \"Invalid email format\"}");
+                return response;
+            }
+
+            // Find user by email using GSI
             Optional<User> existingUserOptional = findUserByEmail(email);
-            if (existingUserOptional.isPresent()) {
-                user = existingUserOptional.get();
-                System.out.println("User already exists: " + user.getEmail());
-            } else {
-                try {
-                    userTable.putItem(user);
-                    System.out.println("New user created: " + email);
-                } catch (ConditionalCheckFailedException e) {
-                    // Return existing user or 409 Conflict
-                    response.setStatusCode(409);
-                    response.setBody("{\"error\": \"User with this email already exists.\"}");
-                    return response;
-                }
+            if (existingUserOptional.isEmpty()) {
+                response.setStatusCode(401);
+                response.setBody("{\"error\": \"Invalid email or password\"}");
+                return response;
+            }
+
+            User user = existingUserOptional.get();
+
+            // Verify password
+            if (!BCrypt.checkpw(password, user.getPasswordHash())) {
+                response.setStatusCode(401);
+                response.setBody("{\"error\": \"Invalid email or password\"}");
+                return response;
             }
 
             // Generate JWT token
             Map<String, Object> claims = new HashMap<>();
-            claims.put("sub", user.getUserId());  // Standard subject claim for user ID
+            claims.put("sub", user.getUserId());
             claims.put("email", user.getEmail());
             if (user.getName() != null) {
                 claims.put("name", user.getName());
             }
             long nowMillis = System.currentTimeMillis();
-            claims.put("iat", nowMillis / 1000);  // Issued at (seconds)
-            claims.put("exp", (nowMillis / 1000) + 3600);  // Expires in 1 hour (adjust as needed)
+            claims.put("iat", nowMillis / 1000);
+            claims.put("exp", (nowMillis / 1000) + 3600);  // 1 hour expiry
 
             String jwtSecret = System.getenv("JWT_SECRET");
             if (jwtSecret == null || jwtSecret.isEmpty()) {
@@ -142,17 +138,22 @@ public class RegisterHandler implements RequestHandler<APIGatewayProxyRequestEve
                     .signWith(signingKey, SignatureAlgorithm.HS256)
                     .compact();
 
-            // Return success response with JWT (don't include password hash!)
-            Map<String, Object> responseBody = new HashMap<>();  // Use Object to support token string
-            responseBody.put("message", "User registered successfully");
+            // Success response (don't include password hash)
+            Map<String, Object> responseBody = new HashMap<>();
+            responseBody.put("message", "Login successful");
             responseBody.put("email", user.getEmail());
-            responseBody.put("token", jwtToken);  // Attach the JWT here
+            if (user.getName() != null) {
+                responseBody.put("name", user.getName());
+            }
+            responseBody.put("token", jwtToken);
 
-            response.setStatusCode(201);
-            response.setBody(gson.toJson(responseBody));  // Gson handles the mixed types
+            response.setStatusCode(200);
+            response.setBody(gson.toJson(responseBody));
             return response;
-        } catch (Exception e) { // For DynamoDB or other errors
-            context.getLogger().log("Error creating user:   " + e.getMessage());
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            context.getLogger().log("Error during login: " + e.getMessage());
             response.setStatusCode(500);
             response.setBody("{\"error\": \"Internal server error\"}");
             return response;

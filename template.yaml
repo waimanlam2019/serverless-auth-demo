@@ -19,6 +19,28 @@ Globals:
     MemorySize: 512
 
 Resources:
+  LoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: AuthFunction
+      Handler: com.auth.LoginHandler::handleRequest
+      Runtime: java21
+      Architectures:
+        - x86_64
+      MemorySize: 512
+      Environment:
+        Variables:
+          USERS_TABLE: !Ref UsersTable
+          JWT_SECRET: !Ref JwtSecret
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Login:
+          Type: Api
+          Properties:
+            Path: /login
+            Method: post
   RegisterFunction:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
@@ -41,6 +63,7 @@ Resources:
           Properties:
             Path: /register
             Method: post
+
   UsersTable:
     Type: AWS::DynamoDB::Table
     Properties:
