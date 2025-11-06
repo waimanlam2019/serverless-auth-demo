@@ -19,6 +19,25 @@ Globals:
     MemorySize: 512
 
 Resources:
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: AuthFunction
+      Handler: com.auth.ChatHandler::handleRequest
+      Runtime: java21
+      Architectures:
+        - x86_64
+      MemorySize: 512
+      Environment:
+        Variables:
+          USERS_TABLE: !Ref UsersTable
+          JWT_SECRET: !Ref JwtSecret
+      Events:
+        Chat:
+          Type: Api
+          Properties:
+            Path: /chat
+            Method: post
   LoginFunction:
     Type: AWS::Serverless::Function
     Properties:

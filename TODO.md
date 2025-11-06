@@ -15,13 +15,13 @@
 
 ## Next: Login Feature 🚧
 
-- [ ] Add JWT library to pom.xml
-- [ ] Create LoginHandler class
-- [ ] Query user by email (EmailIndex)
-- [ ] Verify password with BCrypt
-- [ ] Generate JWT access token
+- ✅ Add JWT library to pom.xml
+- ✅ Create LoginHandler class
+- ✅ Query user by email (EmailIndex)
+- ✅ Verify password with BCrypt
+- ✅ Generate JWT access token
 - [ ] Generate JWT refresh token
-- [ ] Add login endpoint to template.yaml
+- ✅ Add login endpoint to template.yaml
 - [ ] Write LoginHandler tests
 - [ ] Test login flow
 

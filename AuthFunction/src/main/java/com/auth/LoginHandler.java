@@ -11,10 +11,9 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import org.mindrot.jbcrypt.BCrypt;
-import software.amazon.awssdk.core.pagination.sync.SdkIterable;
-import software.amazon.awssdk.enhanced.dynamodb.*;
-import software.amazon.awssdk.enhanced.dynamodb.internal.conditional.EqualToConditional;
-import software.amazon.awssdk.enhanced.dynamodb.model.Page;
+import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient;
+import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
+import software.amazon.awssdk.enhanced.dynamodb.TableSchema;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
 import javax.crypto.SecretKey;
@@ -53,7 +52,7 @@ public class LoginHandler implements RequestHandler<APIGatewayProxyRequestEvent,
 
     @Override
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent event, Context context) {
-        Map<String, String> headers = getCorsHeaders();
+        Map<String, String> headers = CommonUtil.getCorsHeaders();
         APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
                 .withHeaders(headers);
 
@@ -100,7 +99,7 @@ public class LoginHandler implements RequestHandler<APIGatewayProxyRequestEvent,
             }
 
             // Find user by email using GSI
-            Optional<User> existingUserOptional = findUserByEmail(email);
+            Optional<User> existingUserOptional = UserService.findUserByEmail(userTable, email);
             if (existingUserOptional.isEmpty()) {
                 response.setStatusCode(401);
                 response.setBody("{\"error\": \"Invalid email or password\"}");
@@ -160,33 +159,4 @@ public class LoginHandler implements RequestHandler<APIGatewayProxyRequestEvent,
         }
     }
 
-    private Optional<User> findUserByUserId(String userId) {
-        return Optional.ofNullable(userTable.getItem(Key.builder().partitionValue(userId).build()));
-    }
-
-    private Optional<User> findUserByEmail(String email) {
-        DynamoDbIndex<User> emailGSI = userTable.index("EmailIndex");
-
-        SdkIterable<Page<User>> results = emailGSI.query(new EqualToConditional(Key.builder()
-                .partitionValue(email.toLowerCase())
-                .build()));
-
-        User existingUser = null;
-        for (Page<User> page : results) {
-            if (!page.items().isEmpty()) {
-                existingUser = page.items().getFirst();
-                break;
-            }
-        }
-        return Optional.ofNullable(existingUser);
-    }
-
-    private Map<String, String> getCorsHeaders() {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "application/json");
-        headers.put("Access-Control-Allow-Origin", "*");
-        headers.put("Access-Control-Allow-Methods", "POST, OPTIONS");
-        headers.put("Access-Control-Allow-Headers", "Content-Type");
-        return headers;
-    }
 }
