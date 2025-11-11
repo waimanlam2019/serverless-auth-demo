@@ -18,18 +18,46 @@ permissions:
   id-token: write   # This is required for requesting the JWT
   contents: read    # This is required for actions/checkout
 jobs:
-  AssumeRoleAndCallIdentity:
+  #AssumeRoleAndCallIdentity:
+  #  runs-on: ubuntu-latest
+  #  steps:
+  #    - name: Git clone the repository
+  #      uses: actions/checkout@v4
+  #    - name: configure aws credentials
+  #      uses: aws-actions/configure-aws-credentials@v4
+  #      with:
+  #        role-to-assume: arn:aws:iam::242688142619:role/GitHubAction-AssumeRoleWithAction
+  #        role-session-name: GitHub_to_AWS_via_FederatedOIDC
+  #        aws-region: us-east-1
+  #    # Hello from AWS: WhoAmI
+  #    - name: Sts GetCallerIdentity
+  #      run: |
+  #        aws sts get-caller-identity
+  security_scans:
+    name: Perform security scans
     runs-on: ubuntu-latest
     steps:
-      - name: Git clone the repository
-        uses: actions/checkout@v4
-      - name: configure aws credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v4
         with:
-          role-to-assume: arn:aws:iam::242688142619:role/GitHubAction-AssumeRoleWithAction
-          role-session-name: GitHub_to_AWS_via_FederatedOIDC
-          aws-region: us-east-1
-      # Hello from AWS: WhoAmI
-      - name: Sts GetCallerIdentity
-        run: |
-          aws sts get-caller-identity
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'zulu' # Alternative distribution options are available.
+      - name: Cache SonarQube packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+      - name: Build and analyze
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=waimanlam2019_serverless-auth-demo
