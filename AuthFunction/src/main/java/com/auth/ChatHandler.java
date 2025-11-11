@@ -15,18 +15,17 @@ public class ChatHandler implements RequestHandler<APIGatewayProxyRequestEvent, 
 
     @Override
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent event, Context context) {
-
         Map<String, String> requestHeaders = (Map<String, String>) event.getHeaders();
         String authHeader = requestHeaders.get("Authorization");
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            return CommonUtil.getAuthenFailedResponse();
+            return CommonUtil.getAuthenFailedResponse(event);
         }
 
         try {
             Claims claims = CommonUtil.verifyToken(authHeader);
 
-            Map<String, String> responseHeaders = CommonUtil.getCorsHeaders();
+            Map<String, String> responseHeaders = CommonUtil.getCorsHeaders(event);
             APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
                     .withHeaders(responseHeaders);
             Map<String, Object> responseBody = new HashMap<>();
@@ -35,7 +34,7 @@ public class ChatHandler implements RequestHandler<APIGatewayProxyRequestEvent, 
             response.setBody(gson.toJson(responseBody));
             return response;
         }catch (SecurityException e){
-            return CommonUtil.getAuthenFailedResponse();
+            return CommonUtil.getAuthenFailedResponse(event);
         }
     }
 

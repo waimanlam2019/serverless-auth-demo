@@ -7,16 +7,12 @@ import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyResponseEvent
 import com.auth.model.User;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
-import io.jsonwebtoken.security.Keys;
 import org.mindrot.jbcrypt.BCrypt;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbEnhancedClient;
 import software.amazon.awssdk.enhanced.dynamodb.DynamoDbTable;
 import software.amazon.awssdk.enhanced.dynamodb.TableSchema;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
-import javax.crypto.SecretKey;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -52,9 +48,8 @@ public class LoginHandler implements RequestHandler<APIGatewayProxyRequestEvent,
 
     @Override
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent event, Context context) {
-        Map<String, String> headers = CommonUtil.getCorsHeaders();
         APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
-                .withHeaders(headers);
+                .withHeaders(CommonUtil.getCorsHeaders(event));
 
         try {
             String body = event.getBody();
@@ -115,28 +110,6 @@ public class LoginHandler implements RequestHandler<APIGatewayProxyRequestEvent,
                 return response;
             }
 
-            // Generate JWT token
-            Map<String, Object> claims = new HashMap<>();
-            claims.put("sub", user.getUserId());
-            claims.put("email", user.getEmail());
-            if (user.getName() != null) {
-                claims.put("name", user.getName());
-            }
-            long nowMillis = System.currentTimeMillis();
-            claims.put("iat", nowMillis / 1000);
-            claims.put("exp", (nowMillis / 1000) + 3600);  // 1 hour expiry
-
-            String jwtSecret = System.getenv("JWT_SECRET");
-            if (jwtSecret == null || jwtSecret.isEmpty()) {
-                throw new RuntimeException("JWT_SECRET environment variable is required");
-            }
-            SecretKey signingKey = Keys.hmacShaKeyFor(jwtSecret.getBytes());
-
-            String jwtToken = Jwts.builder()
-                    .setClaims(claims)
-                    .signWith(signingKey, SignatureAlgorithm.HS256)
-                    .compact();
-
             // Success response (don't include password hash)
             Map<String, Object> responseBody = new HashMap<>();
             responseBody.put("message", "Login successful");
@@ -144,7 +117,7 @@ public class LoginHandler implements RequestHandler<APIGatewayProxyRequestEvent,
             if (user.getName() != null) {
                 responseBody.put("name", user.getName());
             }
-            responseBody.put("token", jwtToken);
+            responseBody.put("token", UserService.generateJwtToken(user));
 
             response.setStatusCode(200);
             response.setBody(gson.toJson(responseBody));
